@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -8,89 +9,101 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v2"
+	"golang.org/x/net/ipv4"
 )
 
 func main() {
-	commands := []*cli.Command{
-		{
-			Name:      "send",
-			Aliases:   []string{"s"},
-			Usage:     "send UDP stream",
-			ArgsUsage: "file ipaddr port",
-			Flags: []cli.Flag{
-				&cli.StringFlag{
-					Name:  "i",
-					Value: "",
-					Usage: "specifies the interface address to use",
-				},
-				&cli.Int64Flag{
-					Name:  "b",
-					Value: 0,
-					Usage: "specifies the bitrate of the file",
-				},
+	send := cli.Command{
+		Name:      "send",
+		Aliases:   []string{"s"},
+		Usage:     "send UDP stream",
+		ArgsUsage: "file host port",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "iface-addr",
+				Aliases: []string{"i"},
+				Value:   "",
+				Usage:   "specifies the network interface IP address",
 			},
-			Action: func(c *cli.Context) error {
-				args := c.Args().Slice()
-				if len(args) == 3 {
-					send(args[0], args[1], args[2], c.String("i"), c.Int64("b"))
-				} else {
-					cli.ShowCommandHelpAndExit(c, "s", 1)
-				}
-				return nil
+			&cli.Int64Flag{
+				Name:  "b",
+				Value: 0,
+				Usage: "specifies the bitrate of the file",
 			},
 		},
-		{
-			Name:      "receive",
-			Aliases:   []string{"r"},
-			Usage:     "receive UDP stream",
-			ArgsUsage: "ipaddr port",
-			Action: func(c *cli.Context) error {
-				args := c.Args().Slice()
-				if len(args) == 2 {
-				} else {
-					cli.ShowCommandHelpAndExit(c, "r", 1)
-				}
-				return nil
-			},
+		Action: func(c *cli.Context) error {
+			args := c.Args().Slice()
+			if len(args) == 3 {
+				send(args[0], args[1], args[2], c.String("i"), c.Int64("b"))
+			} else {
+				cli.ShowCommandHelpAndExit(c, "s", 1)
+			}
+			return nil
 		},
 	}
-
-	app := &cli.App{Commands: commands}
+	recv := cli.Command{
+		Name:      "recv",
+		Aliases:   []string{"r"},
+		Usage:     "receive UDP stream",
+		ArgsUsage: "host port",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "iface",
+				Aliases: []string{"i"},
+				Value:   "",
+				Usage:   "specifies the network interface name",
+			},
+		},
+		Action: func(c *cli.Context) error {
+			args := c.Args().Slice()
+			if len(args) == 2 {
+				return recv(args[0], args[1], c.String("i"))
+			} else {
+				cli.ShowCommandHelpAndExit(c, "r", 1)
+				return nil
+			}
+		},
+	}
+	app := &cli.App{
+		Commands: []*cli.Command{
+			&send,
+			&recv,
+		},
+	}
 	err := app.Run(os.Args)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func send(file, ipaddr, port, iface string, bitrate int64) {
+func send(file, host, port, iface_addr string, bitrate int64) error {
+	if bitrate == 0 {
+		return errors.New("Sorry but please specify the bitrate for now")
+	}
+
 	f, err := os.Open(file)
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
-	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(ipaddr, port))
+	defer f.Close()
+	laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(iface_addr, ""))
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
-	laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(iface, ""))
+	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
 	conn, err := net.DialUDP("udp", laddr, raddr)
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
-	defer f.Close()
 	defer conn.Close()
-
-	if bitrate == 0 {
-		log.Fatal("Sorry, please specify the bitrate...")
-	}
-
 	log.Println("local addr:", conn.LocalAddr())
 
 	beginning := time.Now()
 	packet := make([]byte, 1316)
-	ticks := time.Tick(100 * time.Microsecond)
+	ticks := time.Tick(time.Millisecond)
 	var elapsed time.Duration
 	var sent, target int64
 	for _ = range ticks {
@@ -107,9 +120,40 @@ func send(file, ipaddr, port, iface string, bitrate int64) {
 					log.Println("source loop")
 					f.Seek(0, 0)
 				} else {
-					log.Fatalln(err)
+					return err
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func recv(host, port, iface string) error {
+	ifi, err := net.InterfaceByName(iface)
+	if err != nil {
+		return err
+	}
+	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
+	if err != nil {
+		return err
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	pktConn := ipv4.NewPacketConn(conn)
+	if addr.IP.IsMulticast() {
+		if err := pktConn.JoinGroup(ifi, addr); err != nil {
+			return err
+		}
+	}
+	buffer := make([]byte, 1500)
+	for {
+		n, cm, _, err := pktConn.ReadFrom(buffer)
+		if err != nil {
+			return err
+		}
+		log.Println(n, cm)
 	}
 }
