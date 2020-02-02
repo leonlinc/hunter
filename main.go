@@ -20,25 +20,22 @@ func main() {
 		ArgsUsage: "file host port",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:    "iface-addr",
-				Aliases: []string{"i"},
-				Value:   "",
-				Usage:   "specifies the network interface IP address",
+				Name:  "i",
+				Usage: "specifies the network interface",
 			},
 			&cli.Int64Flag{
 				Name:  "b",
-				Value: 0,
 				Usage: "specifies the bitrate of the file",
 			},
 		},
 		Action: func(c *cli.Context) error {
 			args := c.Args().Slice()
 			if len(args) == 3 {
-				send(args[0], args[1], args[2], c.String("i"), c.Int64("b"))
+				return send(args[0], args[1], args[2], c.String("i"), c.Int64("b"))
 			} else {
 				cli.ShowCommandHelpAndExit(c, "s", 1)
+				return nil
 			}
-			return nil
 		},
 	}
 	recv := cli.Command{
@@ -48,16 +45,18 @@ func main() {
 		ArgsUsage: "host port",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:    "iface",
-				Aliases: []string{"i"},
-				Value:   "",
-				Usage:   "specifies the network interface name",
+				Name:  "i",
+				Usage: "specifies the network interface",
+			},
+			&cli.StringFlag{
+				Name:  "o",
+				Usage: "specifies the output file",
 			},
 		},
 		Action: func(c *cli.Context) error {
 			args := c.Args().Slice()
 			if len(args) == 2 {
-				return recv(args[0], args[1], c.String("i"))
+				return recv(args[0], args[1], c.String("i"), c.String("o"))
 			} else {
 				cli.ShowCommandHelpAndExit(c, "r", 1)
 				return nil
@@ -76,9 +75,9 @@ func main() {
 	}
 }
 
-func send(file, host, port, iface_addr string, bitrate int64) error {
+func send(file, host, port, iface string, bitrate int64) error {
 	if bitrate == 0 {
-		return errors.New("Sorry but please specify the bitrate for now")
+		return errors.New("Sorry but for now bitrate must not be 0")
 	}
 
 	f, err := os.Open(file)
@@ -86,19 +85,24 @@ func send(file, host, port, iface_addr string, bitrate int64) error {
 		return err
 	}
 	defer f.Close()
-	laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(iface_addr, ""))
+
+	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
 	if err != nil {
 		return err
 	}
-	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
+
+	c, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		return err
 	}
-	conn, err := net.DialUDP("udp", laddr, raddr)
-	if err != nil {
-		return err
-	}
+
+	conn := ipv4.NewPacketConn(c)
 	defer conn.Close()
+	if ifi, err := net.InterfaceByName(iface); err == nil {
+		if err := conn.SetMulticastInterface(ifi); err != nil {
+			return err
+		}
+	}
 	log.Println("local addr:", conn.LocalAddr())
 
 	beginning := time.Now()
@@ -113,7 +117,7 @@ func send(file, host, port, iface_addr string, bitrate int64) error {
 			n, err := f.Read(packet)
 			if n != 0 {
 				sent += int64(n * 8)
-				conn.Write(packet[:n])
+				conn.WriteTo(packet, nil, addr)
 			}
 			if err != nil {
 				if err == io.EOF {
@@ -128,32 +132,46 @@ func send(file, host, port, iface_addr string, bitrate int64) error {
 	return nil
 }
 
-func recv(host, port, iface string) error {
-	ifi, err := net.InterfaceByName(iface)
-	if err != nil {
-		return err
-	}
+func recv(host, port, iface, file string) error {
 	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
 	if err != nil {
 		return err
 	}
-	conn, err := net.ListenUDP("udp", addr)
+
+	c, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return err
 	}
+
+	ifi, err := net.InterfaceByName(iface)
+	if err != nil {
+		return err
+	}
+
+	conn := ipv4.NewPacketConn(c)
 	defer conn.Close()
-	pktConn := ipv4.NewPacketConn(conn)
 	if addr.IP.IsMulticast() {
-		if err := pktConn.JoinGroup(ifi, addr); err != nil {
+		if err := conn.JoinGroup(ifi, addr); err != nil {
 			return err
 		}
 	}
-	buffer := make([]byte, 1500)
-	for {
-		n, cm, _, err := pktConn.ReadFrom(buffer)
+
+	var out *os.File
+	if file != "" {
+		out, err = os.Create(file)
 		if err != nil {
 			return err
 		}
-		log.Println(n, cm)
+	}
+
+	buffer := make([]byte, 1500)
+	for {
+		n, _, _, err := conn.ReadFrom(buffer)
+		if err != nil {
+			return err
+		}
+		if out != nil {
+			out.Write(buffer[:n])
+		}
 	}
 }
