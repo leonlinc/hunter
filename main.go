@@ -77,7 +77,7 @@ func main() {
 
 func send(file, host, port, iface string, bitrate int64) error {
 	if bitrate == 0 {
-		return errors.New("Sorry but for now bitrate must not be 0")
+		return errors.New("for now bitrate must not be 0")
 	}
 
 	f, err := os.Open(file)
@@ -95,9 +95,9 @@ func send(file, host, port, iface string, bitrate int64) error {
 	if err != nil {
 		return err
 	}
-
 	conn := ipv4.NewPacketConn(c)
 	defer conn.Close()
+
 	if ifi, err := net.InterfaceByName(iface); err == nil {
 		if err := conn.SetMulticastInterface(ifi); err != nil {
 			return err
@@ -142,24 +142,25 @@ func recv(host, port, iface, file string) error {
 	if err != nil {
 		return err
 	}
-
-	ifi, err := net.InterfaceByName(iface)
-	if err != nil {
-		return err
-	}
-
 	conn := ipv4.NewPacketConn(c)
 	defer conn.Close()
+
+	var ifi *net.Interface
 	if addr.IP.IsMulticast() {
-		if err := conn.JoinGroup(ifi, addr); err != nil {
+		if iface == "" {
+			return errors.New("please specifiy which network interface to join multicast")
+		}
+		if ifi, err = net.InterfaceByName(iface); err != nil {
+			return err
+		}
+		if err = conn.JoinGroup(ifi, addr); err != nil {
 			return err
 		}
 	}
 
 	var out *os.File
 	if file != "" {
-		out, err = os.Create(file)
-		if err != nil {
+		if out, err = os.Create(file); err != nil {
 			return err
 		}
 	}
