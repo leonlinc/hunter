@@ -16,7 +16,7 @@ func main() {
 	send := cli.Command{
 		Name:      "send",
 		Aliases:   []string{"s"},
-		Usage:     "send UDP stream",
+		Usage:     "send TS over UDP",
 		ArgsUsage: "file host port",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -41,7 +41,7 @@ func main() {
 	recv := cli.Command{
 		Name:      "recv",
 		Aliases:   []string{"r"},
-		Usage:     "receive UDP stream",
+		Usage:     "receive TS over RTP/UDP",
 		ArgsUsage: "host port",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -76,10 +76,6 @@ func main() {
 }
 
 func send(file, host, port, iface string, bitrate int64) error {
-	if bitrate == 0 {
-		return errors.New("for now bitrate must not be 0")
-	}
-
 	f, err := os.Open(file)
 	if err != nil {
 		return err
@@ -98,13 +94,22 @@ func send(file, host, port, iface string, bitrate int64) error {
 	conn := ipv4.NewPacketConn(c)
 	defer conn.Close()
 
-	if ifi, err := net.InterfaceByName(iface); err == nil {
-		if err := conn.SetMulticastInterface(ifi); err != nil {
+	if iface != "" {
+		ifi, err := net.InterfaceByName(iface)
+		if err != nil {
+			return err
+		}
+		err = conn.SetMulticastInterface(ifi)
+		if err != nil {
 			return err
 		}
 	}
-	log.Println("local addr:", conn.LocalAddr())
 
+	if bitrate == 0 {
+		return errors.New("for now bitrate must not be 0")
+	}
+
+	log.Println("local addr:", conn.LocalAddr())
 	beginning := time.Now()
 	packet := make([]byte, 1316)
 	ticks := time.Tick(time.Millisecond)
