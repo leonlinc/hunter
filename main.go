@@ -8,9 +8,21 @@ import (
 	"os"
 	"time"
 
+	"github.com/leonlinc/hunter/pcap"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/net/ipv4"
 )
+
+var (
+	root string = "hunter.log"
+)
+
+func init() {
+	err := os.MkdirAll(root, os.ModePerm)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
 
 func main() {
 	send := cli.Command{
@@ -63,12 +75,37 @@ func main() {
 			}
 		},
 	}
+	parseTsPcap := cli.Command{
+		Name:      "parse-ts-pcap",
+		Usage:     "parse TS in pcap",
+		ArgsUsage: "file",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "x",
+				Usage: "extract TS to file",
+			},
+		},
+		Action: func(c *cli.Context) error {
+			args := c.Args().Slice()
+			if len(args) == 1 {
+				p := pcap.CreateParser(root)
+				p.Parse(args[0])
+				p.Close()
+				return nil
+			} else {
+				cli.ShowCommandHelpAndExit(c, "parse-pcap", 1)
+				return nil
+			}
+		},
+	}
 	app := &cli.App{
 		Commands: []*cli.Command{
 			&send,
 			&recv,
+			&parseTsPcap,
 		},
 	}
+
 	err := app.Run(os.Args)
 	if err != nil {
 		log.Fatal(err)
