@@ -4,6 +4,10 @@ import (
 	_ "log"
 )
 
+const (
+	NULL int = 8191
+)
+
 type Packet struct {
 	sync_byte                    int
 	transport_error_indicator    bool
@@ -37,6 +41,14 @@ func (pkt *Packet) PCR() int64 {
 		return pkt.program_clock_reference_base*300 + pkt.program_clock_reference_extension
 	} else {
 		return -1
+	}
+}
+
+func (pkt *Packet) NextCC() int {
+	if pkt.adaptation_field_control == 0 || pkt.adaptation_field_control == 2 {
+		return pkt.continuity_counter
+	} else {
+		return (pkt.continuity_counter + 1) % 16
 	}
 }
 

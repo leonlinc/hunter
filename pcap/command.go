@@ -2,6 +2,7 @@ package pcap
 
 import (
 	"os"
+	"path"
 
 	"github.com/urfave/cli/v2"
 )
@@ -26,13 +27,13 @@ func init() {
 			if len(args) < 1 {
 				return cli.Exit("Not enough arguments", 1)
 			}
-			root := "hunter.log"
+			file := args[0]
+			root := path.Base(file) + ".log"
 			if err := os.MkdirAll(root, os.ModePerm); err != nil {
 				return err
 			}
-			p := CreateParser(root)
-			p.Parse(args[0])
-			p.Close()
+			p := CreateParser()
+			p.Parse(file, root)
 			return nil
 		},
 	}

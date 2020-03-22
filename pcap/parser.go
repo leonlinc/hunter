@@ -1,10 +1,7 @@
 package pcap
 
 import (
-	"fmt"
 	"log"
-	"os"
-	"path"
 	"time"
 
 	"github.com/google/gopacket"
@@ -18,47 +15,41 @@ type Parser struct {
 	dstAddr   string
 	dstPort   string
 	epochTime int64
-	timingLog *os.File
 }
 
-func CreateParser(root string) *Parser {
-	timingLog, err := os.Create(path.Join(root, "pcap-timing.log"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Fprintln(timingLog, "Index", "CaptureTime", "Length", "PID", "PCR")
+func CreateParser() *Parser {
 	return &Parser{
 		epochTime: -1,
-		timingLog: timingLog,
 	}
 }
 
-func (p *Parser) Close() {
-	p.timingLog.Close()
-}
-
-func (p *Parser) Parse(file string) {
+func (p *Parser) Parse(file string, root string) {
 	pcapFile, err := pcap.OpenOffline(file)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer pcapFile.Close()
 
-	var idx int64
+	ccAnalyzer := m2ts.CreateCCAnalyzer(root)
+	pcrAnalyzer := m2ts.CreatePCRAnalyzer(root)
+
+	var idx, packetIndex int64
 	source := gopacket.NewPacketSource(pcapFile, pcapFile.LinkType())
 	for packet := range source.Packets() {
 		captureTime := p.getCaptureTime(packet)
 		if p.isValid(packet) {
 			payload := packet.ApplicationLayer().Payload()
 			for pkt := range m2ts.Packets(payload) {
-				pcr := pkt.PCR()
-				if pcr != -1 {
-					fmt.Fprintln(p.timingLog, idx, captureTime, len(payload), pkt.PID, pcr)
-				}
+				ccAnalyzer.Process(idx, pkt)
+				pcrAnalyzer.Process(idx, pkt, m2ts.Metadata{packetIndex, captureTime, -1})
+				idx += 1
 			}
 		}
-		idx += 1
+		packetIndex += 1
 	}
+
+	ccAnalyzer.Close()
+	pcrAnalyzer.Close()
 }
 
 func (p *Parser) getCaptureTime(packet gopacket.Packet) int64 {
